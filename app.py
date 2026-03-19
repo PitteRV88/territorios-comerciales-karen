@@ -10,6 +10,9 @@ import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 import snowflake.connector
+import base64
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.backends import default_backend
 
 st.set_page_config(
     page_title="Territorios Comerciales - Karen",
@@ -19,10 +22,18 @@ st.set_page_config(
 )
 
 def get_connection():
+    pk_b64 = st.secrets["snowflake"]["private_key"]
+    pk_der = base64.b64decode(pk_b64)
+    private_key = serialization.load_der_private_key(pk_der, password=None, backend=default_backend())
+    pk_bytes = private_key.private_bytes(
+        encoding=serialization.Encoding.DER,
+        format=serialization.PrivateFormat.PKCS8,
+        encryption_algorithm=serialization.NoEncryption()
+    )
     return snowflake.connector.connect(
         account=st.secrets["snowflake"]["account"],
         user=st.secrets["snowflake"]["user"],
-        password=st.secrets["snowflake"]["password"],
+        private_key=pk_bytes,
         warehouse=st.secrets["snowflake"]["warehouse"],
         database=st.secrets["snowflake"]["database"],
         schema=st.secrets["snowflake"]["schema"],
