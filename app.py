@@ -336,13 +336,11 @@ st.subheader("Detalle de Cuentas")
 display_cols = ["ACCT_NAME", "INDUSTRIA_NOMBRE", "CONTACTO_PRINCIPAL", "CONTACTO_CARGO",
                 "TAMANO_EMPRESA", "NUM_EMPLEADOS_ESTIMADO", "REVENUE_ESTIMADO_USD",
                 "BILLING_STATE", "BILLING_COUNTRY",
-                "SITIO_WEB", "LINKEDIN_EMPRESA", "CONTACTO_HAS_EMAIL"]
+                "SITIO_WEB", "CONTACTO_LINKEDIN", "CONTACTO_EMAIL_NUEVO"]
 df_display = df_filtered[display_cols].copy()
 df_display.columns = ["Empresa", "Industria", "Contacto", "Cargo Contacto",
                        "Tamaño", "Empleados Est.", "Revenue Est. USD", "Estado", "País",
-                       "Sitio Web", "LinkedIn Empresa", "Email Disponible"]
-df_display["Email Disponible"] = df_display["Email Disponible"].apply(
-    lambda x: "✓" if x else "")
+                       "Sitio Web", "LinkedIn Contacto", "Email Contacto"]
 df_display = df_display.fillna("")
 df_display["Revenue Est. USD"] = df_display["Revenue Est. USD"].apply(
     lambda x: f"${float(x)/1e6:,.1f}M" if x and x != "" and x != 0 else "")
