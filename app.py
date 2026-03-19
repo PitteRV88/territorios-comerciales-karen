@@ -1,10 +1,3 @@
-# =============================================================
-# app.py - Territorios Comerciales Karen (Streamlit Cloud)
-# Dashboard interactivo con Snowflake: KPIs, graficas, filtros
-# por industria/estado/pais, heatmap, top 15 por industria,
-# insights Cortex AI y pitch personalizado.
-# =============================================================
-
 import streamlit as st
 import pandas as pd
 import plotly.express as px
@@ -45,19 +38,33 @@ def load_data():
     conn = get_connection()
     cur = conn.cursor()
     cur.execute("""
+        WITH best_contact AS (
+            SELECT *
+            FROM DB_TERRITORIOS_COMERCIALES.CORE.DIM_CONTACTOS
+            QUALIFY ROW_NUMBER() OVER (
+                PARTITION BY CUENTA_ID
+                ORDER BY PRIORIDAD ASC, HAS_EMAIL DESC, CREATED_AT DESC
+            ) = 1
+        )
         SELECT c.CUENTA_ID, c.ACCT_NAME, i.INDUSTRIA_NOMBRE,
                t.NOMBRE AS TERRITORIO, e.NOMBRE AS EJECUTIVO,
                c.ESTATUS, c.UBICACION, c.SITIO_WEB,
                c.CONTACTO_EMAIL, c.CONTACTO_TELEFONO,
-               c.PERSONA_INTERES, c.CARGO_PERSONA, c.LINKEDIN_PERFIL,
+               c.PERSONA_INTERES, c.CARGO_PERSONA, c.LINKEDIN_EMPRESA,
                c.FUENTE_CLASIFICACION, c.NOTAS, c.CREATED_AT, c.UPDATED_AT,
                c.NUM_EMPLEADOS_ESTIMADO, c.REVENUE_ESTIMADO_USD,
                c.TAMANO_EMPRESA, c.FUENTE_TAMANO,
-               c.BILLING_STATE, c.BILLING_COUNTRY, c.INDUSTRIA_DETALLE
+               c.BILLING_STATE, c.BILLING_COUNTRY, c.INDUSTRIA_DETALLE,
+               bc.NOMBRE_COMPLETO AS CONTACTO_PRINCIPAL,
+               bc.CARGO AS CONTACTO_CARGO,
+               bc.EMAIL AS CONTACTO_EMAIL_NUEVO,
+               bc.LINKEDIN_PERFIL AS CONTACTO_LINKEDIN,
+               bc.HAS_EMAIL AS CONTACTO_HAS_EMAIL
         FROM DB_TERRITORIOS_COMERCIALES.CORE.DIM_CUENTAS c
         JOIN DB_TERRITORIOS_COMERCIALES.CORE.DIM_INDUSTRIAS i ON c.INDUSTRIA_ID = i.INDUSTRIA_ID
         LEFT JOIN DB_TERRITORIOS_COMERCIALES.CORE.DIM_TERRITORIOS t ON c.TERRITORIO_ID = t.TERRITORIO_ID
         LEFT JOIN DB_TERRITORIOS_COMERCIALES.CORE.DIM_EJECUTIVOS e ON t.EJECUTIVO_ID = e.EJECUTIVO_ID
+        LEFT JOIN best_contact bc ON c.CUENTA_ID = bc.CUENTA_ID
         ORDER BY c.ACCT_NAME
     """)
     cols = [desc[0] for desc in cur.description]
@@ -92,7 +99,7 @@ with st.sidebar:
     sel_territorio = st.multiselect("Territorio", territorios, default=territorios)
     fuentes = sorted(df["FUENTE_CLASIFICACION"].dropna().unique())
     sel_fuentes = st.multiselect("Fuente Clasificación", fuentes, default=fuentes)
-    sel_contacto = st.selectbox("Datos de Contacto", ["Todos", "Con LinkedIn", "Con Email", "Con Sitio Web", "Sin Datos"])
+    sel_contacto = st.selectbox("Datos de Contacto", ["Todos", "Con Contacto", "Con LinkedIn", "Con Email", "Con Sitio Web", "Sin Datos"])
     tamanos = ["Micro", "Pequeña", "Mediana", "Grande", "Enterprise"]
     sel_tamanos = st.multiselect("Tamaño Empresa", tamanos, default=tamanos)
     buscar = st.text_input("Buscar cuenta", placeholder="Nombre de empresa...")
@@ -108,15 +115,17 @@ elif "Sin Territorio" in sel_territorio and "Con Territorio" not in sel_territor
 
 df_filtered = df_filtered[df_filtered["FUENTE_CLASIFICACION"].isin(sel_fuentes) | df_filtered["FUENTE_CLASIFICACION"].isna()]
 
-if sel_contacto == "Con LinkedIn":
-    df_filtered = df_filtered[df_filtered["LINKEDIN_PERFIL"].notna() & (df_filtered["LINKEDIN_PERFIL"] != "")]
+if sel_contacto == "Con Contacto":
+    df_filtered = df_filtered[df_filtered["CONTACTO_PRINCIPAL"].notna() & (df_filtered["CONTACTO_PRINCIPAL"] != "")]
+elif sel_contacto == "Con LinkedIn":
+    df_filtered = df_filtered[df_filtered["LINKEDIN_EMPRESA"].notna() & (df_filtered["LINKEDIN_EMPRESA"] != "")]
 elif sel_contacto == "Con Email":
     df_filtered = df_filtered[df_filtered["CONTACTO_EMAIL"].notna() & (df_filtered["CONTACTO_EMAIL"] != "")]
 elif sel_contacto == "Con Sitio Web":
     df_filtered = df_filtered[df_filtered["SITIO_WEB"].notna() & (df_filtered["SITIO_WEB"] != "")]
 elif sel_contacto == "Sin Datos":
     df_filtered = df_filtered[
-        (df_filtered["LINKEDIN_PERFIL"].isna() | (df_filtered["LINKEDIN_PERFIL"] == "")) &
+        (df_filtered["LINKEDIN_EMPRESA"].isna() | (df_filtered["LINKEDIN_EMPRESA"] == "")) &
         (df_filtered["CONTACTO_EMAIL"].isna() | (df_filtered["CONTACTO_EMAIL"] == "")) &
         (df_filtered["SITIO_WEB"].isna() | (df_filtered["SITIO_WEB"] == ""))
     ]
@@ -130,14 +139,16 @@ st.title("Territorios Comerciales - Karen")
 st.caption(f"DB_TERRITORIOS_COMERCIALES | {len(df_filtered)} de {len(df)} cuentas mostradas")
 
 total = len(df_filtered)
+con_territorio = df_filtered["TERRITORIO"].notna().sum()
+con_linkedin = ((df_filtered["LINKEDIN_EMPRESA"].notna()) & (df_filtered["LINKEDIN_EMPRESA"] != "")).sum()
+con_sitio = ((df_filtered["SITIO_WEB"].notna()) & (df_filtered["SITIO_WEB"] != "")).sum()
+con_contacto = ((df_filtered["CONTACTO_PRINCIPAL"].notna()) & (df_filtered["CONTACTO_PRINCIPAL"] != "")).sum()
 total_emp = int(df_filtered["NUM_EMPLEADOS_ESTIMADO"].fillna(0).sum())
 n_paises = df_filtered["BILLING_COUNTRY"].dropna().nunique()
 rev_by_ind = df_filtered.groupby("INDUSTRIA_NOMBRE")["REVENUE_ESTIMADO_USD"].apply(
     lambda x: float(x.fillna(0).sum())).sort_values(ascending=False)
 top_ind_name = rev_by_ind.index[0] if len(rev_by_ind) > 0 else "N/A"
 top_ind_rev = rev_by_ind.iloc[0] if len(rev_by_ind) > 0 else 0
-con_sitio = ((df_filtered["SITIO_WEB"].notna()) & (df_filtered["SITIO_WEB"] != "")).sum()
-con_linkedin = ((df_filtered["LINKEDIN_PERFIL"].notna()) & (df_filtered["LINKEDIN_PERFIL"] != "")).sum()
 
 with st.container(horizontal=True):
     st.metric("Total Cuentas", total, border=True)
@@ -146,6 +157,7 @@ with st.container(horizontal=True):
     st.metric("Países", n_paises, border=True)
     st.metric("Con Sitio Web", int(con_sitio), border=True)
     st.metric("Con LinkedIn", int(con_linkedin), border=True)
+    st.metric("Con Contacto", int(con_contacto), border=True)
 
 col1, col2 = st.columns(2)
 
@@ -215,6 +227,56 @@ with st.container(border=True):
     st.plotly_chart(fig_heat, use_container_width=True)
 
 st.divider()
+st.subheader("Top 10 Cuentas Principales de Interés (Global)")
+st.caption("Ranking global combinado: datos obtenidos (0-5) + tamaño empresa (0-5) — todas las industrias")
+
+tamano_score_map_g = {"Micro": 1, "Pequeña": 2, "Mediana": 3, "Grande": 4, "Enterprise": 5}
+enriq_cols_g = ["SITIO_WEB", "UBICACION", "CONTACTO_PRINCIPAL", "LINKEDIN_EMPRESA", "CONTACTO_CARGO"]
+df_global = df_filtered.copy()
+df_global["ENRIQ_SCORE"] = df_global[enriq_cols_g].apply(
+    lambda row: sum(1 for v in row if v and str(v).strip()), axis=1)
+df_global["TAMANO_SCORE"] = df_global["TAMANO_EMPRESA"].map(tamano_score_map_g).fillna(0).astype(int)
+df_global["SCORE_TOTAL"] = df_global["ENRIQ_SCORE"] + df_global["TAMANO_SCORE"]
+df_top10_global = df_global.nlargest(10, ["SCORE_TOTAL", "TAMANO_SCORE", "ENRIQ_SCORE"])
+
+col_g1, col_g2 = st.columns([2, 1])
+with col_g1:
+    with st.container(border=True):
+        df_g10_display = df_top10_global[["ACCT_NAME", "INDUSTRIA_NOMBRE", "INDUSTRIA_DETALLE",
+                                          "TAMANO_EMPRESA", "ENRIQ_SCORE", "TAMANO_SCORE",
+                                          "SCORE_TOTAL", "BILLING_STATE", "BILLING_COUNTRY",
+                                          "SITIO_WEB", "LINKEDIN_EMPRESA", "CONTACTO_PRINCIPAL"]].copy()
+        df_g10_display.columns = ["Empresa", "Industria", "Sub-Industria", "Tamaño",
+                                   "Datos (0-5)", "Tamaño (0-5)", "Score Total",
+                                   "Estado", "País", "Sitio Web", "LinkedIn", "Contacto"]
+        df_g10_display = df_g10_display.fillna("")
+        st.dataframe(
+            df_g10_display,
+            use_container_width=True,
+            hide_index=True,
+            height=420,
+            column_config={
+                "Sitio Web": st.column_config.LinkColumn("Sitio Web", display_text="Abrir"),
+                "LinkedIn": st.column_config.LinkColumn("LinkedIn", display_text="Ver"),
+                "Score Total": st.column_config.ProgressColumn("Score", min_value=0, max_value=10),
+            }
+        )
+
+with col_g2:
+    with st.container(border=True):
+        st.markdown("**Composición del Score**")
+        fig_g10 = px.bar(
+            df_g10_display,
+            y="Empresa", x=["Datos (0-5)", "Tamaño (0-5)"],
+            orientation="h", barmode="stack",
+            color_discrete_sequence=["#3498db", "#2ecc71"],
+            labels={"value": "Puntos", "variable": "Componente"}
+        )
+        fig_g10.update_layout(height=400, margin=dict(l=0, r=0, t=10, b=0),
+                              yaxis=dict(autorange="reversed"), legend=dict(orientation="h", y=-0.15))
+        st.plotly_chart(fig_g10, use_container_width=True)
+
+st.divider()
 st.subheader("Top 15 Cuentas de Interés por Industria")
 
 ind_list_top = sorted(df_filtered["INDUSTRIA_NOMBRE"].unique())
@@ -224,7 +286,7 @@ st.caption(f"Ranking combinado: datos obtenidos + tamaño — {sel_ind_top15}")
 
 tamano_score_map = {"Micro": 1, "Pequeña": 2, "Mediana": 3, "Grande": 4, "Enterprise": 5}
 df_top = df_filtered[df_filtered["INDUSTRIA_NOMBRE"] == sel_ind_top15].copy()
-enriq_cols = ["SITIO_WEB", "UBICACION", "CONTACTO_EMAIL", "LINKEDIN_PERFIL", "PERSONA_INTERES"]
+enriq_cols = ["SITIO_WEB", "UBICACION", "CONTACTO_PRINCIPAL", "LINKEDIN_EMPRESA", "CONTACTO_CARGO"]
 df_top["ENRIQ_SCORE"] = df_top[enriq_cols].apply(
     lambda row: sum(1 for v in row if v and str(v).strip()), axis=1)
 df_top["TAMANO_SCORE"] = df_top["TAMANO_EMPRESA"].map(tamano_score_map).fillna(0).astype(int)
@@ -237,10 +299,10 @@ with col_t1:
         df_t15_display = df_top15[["ACCT_NAME", "INDUSTRIA_DETALLE", "TAMANO_EMPRESA",
                                     "ENRIQ_SCORE", "TAMANO_SCORE", "SCORE_TOTAL",
                                     "BILLING_STATE", "BILLING_COUNTRY",
-                                    "SITIO_WEB", "LINKEDIN_PERFIL", "CONTACTO_EMAIL"]].copy()
+                                    "SITIO_WEB", "LINKEDIN_EMPRESA", "CONTACTO_PRINCIPAL"]].copy()
         df_t15_display.columns = ["Empresa", "Sub-Industria", "Tamaño", "Datos (0-5)",
                                    "Tamaño (0-5)", "Score Total", "Estado", "País",
-                                   "Sitio Web", "LinkedIn", "Email"]
+                                   "Sitio Web", "LinkedIn", "Contacto"]
         df_t15_display = df_t15_display.fillna("")
         st.dataframe(
             df_t15_display,
@@ -271,14 +333,16 @@ with col_t2:
 st.divider()
 st.subheader("Detalle de Cuentas")
 
-display_cols = ["ACCT_NAME", "INDUSTRIA_NOMBRE", "INDUSTRIA_DETALLE", "TAMANO_EMPRESA",
-                "NUM_EMPLEADOS_ESTIMADO", "REVENUE_ESTIMADO_USD",
+display_cols = ["ACCT_NAME", "INDUSTRIA_NOMBRE", "CONTACTO_PRINCIPAL", "CONTACTO_CARGO",
+                "TAMANO_EMPRESA", "NUM_EMPLEADOS_ESTIMADO", "REVENUE_ESTIMADO_USD",
                 "BILLING_STATE", "BILLING_COUNTRY",
-                "SITIO_WEB", "LINKEDIN_PERFIL", "CONTACTO_EMAIL", "FUENTE_CLASIFICACION"]
+                "SITIO_WEB", "LINKEDIN_EMPRESA", "CONTACTO_HAS_EMAIL"]
 df_display = df_filtered[display_cols].copy()
-df_display.columns = ["Empresa", "Industria", "Sub-Industria", "Tamaño", "Empleados Est.",
-                       "Revenue Est. USD", "Estado", "País",
-                       "Sitio Web", "LinkedIn", "Email", "Fuente"]
+df_display.columns = ["Empresa", "Industria", "Contacto", "Cargo Contacto",
+                       "Tamaño", "Empleados Est.", "Revenue Est. USD", "Estado", "País",
+                       "Sitio Web", "LinkedIn Empresa", "Email Disponible"]
+df_display["Email Disponible"] = df_display["Email Disponible"].apply(
+    lambda x: "✓" if x else "")
 df_display = df_display.fillna("")
 df_display["Revenue Est. USD"] = df_display["Revenue Est. USD"].apply(
     lambda x: f"${float(x)/1e6:,.1f}M" if x and x != "" and x != 0 else "")
@@ -290,7 +354,7 @@ st.dataframe(
     height=400,
     column_config={
         "Sitio Web": st.column_config.LinkColumn("Sitio Web", display_text="Abrir"),
-        "LinkedIn": st.column_config.LinkColumn("LinkedIn", display_text="Ver Perfil"),
+        "LinkedIn Empresa": st.column_config.LinkColumn("LinkedIn Empresa", display_text="Ver Perfil"),
     }
 )
 
@@ -369,12 +433,16 @@ if sel_cuenta:
         contexto += f"\nUbicación: {row['UBICACION']}"
     if row["SITIO_WEB"] and str(row["SITIO_WEB"]).strip():
         contexto += f"\nSitio web: {row['SITIO_WEB']}"
-    if row["LINKEDIN_PERFIL"] and str(row["LINKEDIN_PERFIL"]).strip():
-        contexto += f"\nLinkedIn: {row['LINKEDIN_PERFIL']}"
-    if row["CONTACTO_EMAIL"] and str(row["CONTACTO_EMAIL"]).strip():
+    if row["LINKEDIN_EMPRESA"] and str(row["LINKEDIN_EMPRESA"]).strip():
+        contexto += f"\nLinkedIn empresa: {row['LINKEDIN_EMPRESA']}"
+    if row.get("CONTACTO_PRINCIPAL") and str(row["CONTACTO_PRINCIPAL"]).strip():
+        contexto += f"\nPersona de interés: {row['CONTACTO_PRINCIPAL']}"
+    if row.get("CONTACTO_CARGO") and str(row["CONTACTO_CARGO"]).strip():
+        contexto += f"\nCargo: {row['CONTACTO_CARGO']}"
+    if row.get("CONTACTO_EMAIL_NUEVO") and str(row["CONTACTO_EMAIL_NUEVO"]).strip():
+        contexto += f"\nEmail contacto: {row['CONTACTO_EMAIL_NUEVO']}"
+    elif row.get("CONTACTO_EMAIL") and str(row["CONTACTO_EMAIL"]).strip():
         contexto += f"\nEmail contacto: {row['CONTACTO_EMAIL']}"
-    if row["CARGO_PERSONA"] and str(row["CARGO_PERSONA"]).strip():
-        contexto += f"\nCargo persona de interés: {row['CARGO_PERSONA']}"
     contexto += f"\nFuente de clasificación: {row['FUENTE_CLASIFICACION'] or 'CSV original'}"
     contexto += insights_ctx
 
@@ -382,12 +450,19 @@ if sel_cuenta:
         try:
             conn_nl = get_connection()
             cur_nl = conn_nl.cursor()
+            nombre_contacto = "XXXXX"
+            if row.get("CONTACTO_PRINCIPAL") and str(row["CONTACTO_PRINCIPAL"]).strip():
+                nombre_contacto = str(row["CONTACTO_PRINCIPAL"]).strip().split()[0]
+            elif row.get("PERSONA_INTERES") and str(row["PERSONA_INTERES"]).strip():
+                nombre_contacto = str(row["PERSONA_INTERES"]).strip().split()[0]
+
             prompt = (
-                "Eres un ejecutivo de ventas de Snowflake en México. Genera un pitch de ventas personalizado "
-                "en español (5-6 oraciones) para esta cuenta. Incluye: 1) saludo mencionando la empresa, "
-                "2) un reto específico de su industria que puedes resolver, 3) un caso de uso concreto de "
-                "Snowflake relevante para ellos, 4) siguiente paso recomendado (demo, reunión, etc). "
-                "Usa un tono profesional pero cercano. Datos:\n" + contexto
+                f"Eres un ejecutivo de ventas de Snowflake en México. Genera un pitch de ventas personalizado "
+                f"en español (5-6 oraciones) para esta cuenta. Incluye: 1) saludo dirigido a '{nombre_contacto}' "
+                f"mencionando la empresa, "
+                f"2) un reto específico de su industria que puedes resolver, 3) un caso de uso concreto de "
+                f"Snowflake relevante para ellos, 4) siguiente paso recomendado (demo, reunión, etc). "
+                f"Usa un tono profesional pero cercano. Datos:\n" + contexto
             )
             cur_nl.execute(
                 "SELECT SNOWFLAKE.CORTEX.COMPLETE('llama3.1-8b', %s) AS DESCRIPCION",
